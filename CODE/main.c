@@ -55,8 +55,8 @@ volatile uint8_t ButtonCode = 0;
 volatile uint16_t RefVal[NUM_KEY];
 volatile uint8_t ShowMode;
 volatile uint16_t WaitSetCount = 0;
-volatile uint8_t SetTimeCount = 0;
-volatile uint8_t SetDateCount = 0;
+volatile uint8_t IncButtonCnt = 0;
+volatile uint8_t DecButtonCnt = 0;
 volatile uint8_t AutoShowModeCnt;
 volatile uint8_t AutoShowModeEnable = 1;
 volatile uint8_t ReadRTC = 0;
@@ -79,6 +79,7 @@ volatile struct Alarm
 {
 	uint8_t Hour;
 	uint8_t Minute;
+	uint8_t CasperFlag;
 } Alarm;
 
 void beep(uint16_t cycles)
@@ -285,6 +286,7 @@ void show_message( char* string)
 ISR(TIMER0_OVF_vect)
 {
 	IND_Update();
+	//TOUCH_CompareKey();
 	if(TOUCH_CompareKey()) beep(1);
 }
 
@@ -312,14 +314,14 @@ ISR(INT0_vect)
 
 int main()
 {
-
 	int16_t Humidity;
 	int16_t Temperature;
+	char Text[40];
 	eeprom_read_block( (uint8_t*)&Alarm, 0, sizeof( Alarm ) );
 
 	if(Alarm.Hour == 0xFF) {
-		Alarm.Hour = 23;
-		Alarm.Minute = 57;
+		Alarm.Hour = 0;
+		Alarm.Minute = 0;
 		DateTime.Hour = 0;
 		DateTime.Minute = 0;
 		rtc_set_time(DateTime.Hour, DateTime.Minute, 0);
@@ -378,50 +380,66 @@ int main()
 		}
 
 		if ( ButtonCode == INC_BUT_CODE ) {
-			if(++ShowMode==EndShowMode) ShowMode = Time;
+			if(++ShowMode == EndShowMode) ShowMode = (StartShowMode + 1);
 			AlarmEn = 0;
 			AutoShowModeEnable = 0;
 			if (WaitSetCount < WAIT_SET_COUNT) {
-				SetTimeCount++;
+				IncButtonCnt++;
 			}
 		}
 
 		if ( ButtonCode == DEC_BUT_CODE ) {
-			if(--ShowMode==StartShowMode) ShowMode = Temp;
+			if(--ShowMode == StartShowMode) ShowMode = Hum;
 			AlarmEn = 0;
 			AutoShowModeEnable = 0;
 			if (WaitSetCount < WAIT_SET_COUNT) {
-				SetDateCount++;
+				DecButtonCnt++;
 			}
 		}
 
 		if ( ButtonCode == SET_BUT_CODE ) {
-			SetTimeCount = 0;
-			SetDateCount = 0;
+			IncButtonCnt = 0;
+			DecButtonCnt = 0;
 			AlarmEn = 0;
 			AutoShowModeEnable = 1;
 			WaitSetCount = RESET_WAIT_SET_COUNT;
 		}
 
-		if ( (SetTimeCount == 3) && (SetDateCount == 0) ) {
-			SetTimeCount = 0;
-			SetDateCount = 0;
+		// Установка времени
+		// Нажать один раз кнопку "Set" и 3 раза кнопку "+"
+		if ( (IncButtonCnt == 3) && (DecButtonCnt == 0) ) {
+			IncButtonCnt = 0;
+			DecButtonCnt = 0;
 			set_time();
 		}
-		if ( (SetTimeCount == 0) && (SetDateCount == 3) ) {
-			SetTimeCount = 0;
-			SetDateCount = 0;
+		// Установка даты
+		// Нажать один раз кнопку "Set" и 3 раза кнопку "-"
+		if ( (IncButtonCnt == 0) && (DecButtonCnt == 3) ) {
+			IncButtonCnt = 0;
+			DecButtonCnt = 0;
 			set_date();
 		}
-		if ( (SetTimeCount == 3) && (SetDateCount == 1) ) {
-			SetTimeCount = 0;
-			SetDateCount = 0;
+		// Установка будильника
+		// Нажать один раз кнопку "Set", один раз кнопку "-" и 3 раза кнопку "+"
+		if ( (IncButtonCnt == 3) && (DecButtonCnt == 1) ) {
+			IncButtonCnt = 0;
+			DecButtonCnt = 0;
 			set_alarm();
 		}
-		if ( (SetTimeCount == 1) && (SetDateCount == 3) ) {
-			SetTimeCount = 0;
-			SetDateCount = 0;
-			show_message("    HELLO  CASPEr ");
+		// Включение/отключение отображения приветственной надписи.
+		// Нажать один раз кнопку "Set", один раз кнопку "+" и 3 раза кнопку "-"
+		if ( (IncButtonCnt == 1) && (DecButtonCnt == 3) ) {
+			IncButtonCnt = 0;
+			DecButtonCnt = 0;
+			if (Alarm.CasperFlag == 0) {
+				Alarm.CasperFlag = 1;
+			}
+			else {
+				Alarm.CasperFlag = 0;
+			}
+			sprintf(Text, "    CASPEr %s ", (Alarm.CasperFlag == 0)?("OFF"):("On"));
+			SaveEEPROM = 1;
+			show_message(Text);
 		}
 
 		switch(ShowMode)
@@ -436,18 +454,20 @@ int main()
 			case Temp: {
 				ClearBit( BLINK_LED_PORT, BLINK_LED_PIN );
 				IND_OutSym(" ", 1);
+				IND_OutSym((Temperature >= 0)?(" "):("-"), 1);
 				IND_OutUintFormat(Temperature, 0, 2, 3);
 				IND_OutSym("*", 4);
 			}; break;
 			case Hum: {
 				ClearBit( BLINK_LED_PORT, BLINK_LED_PIN );
-				IND_OutSym("H ", 1);
-				IND_OutUintFormat(Humidity, 0, 3, 4);
-				//IND_OutSym("h", 4);
+				IND_OutSym("H", 1);
+				IND_OutUintFormat(Humidity, 0, 2, 4);
 			}; break;
 			case CasperShow: {
-				ClearBit( BLINK_LED_PORT, BLINK_LED_PIN );
-				show_message("    HELLO  CASPEr ");
+				if (Alarm.CasperFlag == 1) {
+					ClearBit( BLINK_LED_PORT, BLINK_LED_PIN );
+					show_message("    HELLO  CASPEr ");
+				}
 				ShowMode = Time;
 			}; break;
 			default: {
@@ -467,6 +487,7 @@ int main()
 
 			rtc_get_time( (uint8_t*)&DateTime.Hour, (uint8_t*)&DateTime.Minute, (uint8_t*)&DateTime.Second);
 			rtc_get_date( (uint8_t*)&DateTime.Day, (uint8_t*)&DateTime.Mons, (uint8_t*)&DateTime.Year);
+
 			// События будильника активны, если Часы и Минуты будильника отличны от нуля
 			if ( (Alarm.Hour != 0) && (Alarm.Minute != 0) ) {
 				// Включение сигнала будильника
